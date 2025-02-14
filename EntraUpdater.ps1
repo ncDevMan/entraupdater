@@ -7,11 +7,12 @@ param (
 # Import necessary module
 Import-Module ImportExcel
 
-# Column Mappings: We will use the keys as the InputFile column names and the values as the OutputFile column names
-$columnMappings = @{
+# Column Mappings: We will use the keys as the InputFile column names and the values as the OutputFile column names. 
+# We will also use this as an "Ordered List" for the output file.
+$columnMappings = [ordered]@{
     "Work Email" = "UserPrincipalName"
-    "Manager" = "ManagerUserPrincipalName"
     "Job Title" = "JobTitle"
+    "Manager" = "ManagerUserPrincipalName"
     "Employee Code" = "EmployeeID"
     "Contract" = "Department"
     "Hire Date" = "ExtensionAttribute1"
@@ -28,63 +29,60 @@ $skippedColumns = @(
 
 
 function Process-File {
-
     param (
         [string]$InputFile,
         [string]$OutputFile
     )
 
-    #Determine what File Type we are inputting
-    $fileExtension = [System.IO.Path]::GetExtension($InputFile)
+    Write-Output "Processing file: $InputFile"
 
+    # Determine file type
+    $fileExtension = [System.IO.Path]::GetExtension($InputFile).ToLower()
 
+    # Read the input file
     if ($fileExtension -eq ".xlsx") {
-        # Read Excel file
         $data = Import-Excel -Path $InputFile
-
-        Write-Host "Reading File: $InputFile"
     } elseif ($fileExtension -eq ".csv") {
-        # Read CSV file
         $data = Import-Csv -Path $InputFile
-
-        Write-Host "Reading File: $InputFile"
     } else {
-        Write-Host "Unsupported file type: $fileExtension. Use XLSX or CSV."
+        Write-Output "Unsupported file type: $fileExtension. Use XLSX or CSV."
         return
     }
 
-    # Check if the column exists and rename it
+    # Get current column names
     $columnNames = $data | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
 
-     # Loop through column mappings and rename matching columns
-     foreach ($oldColumn in $columnMappings.Keys) {
-        $newColumn = $columnMappings[$oldColumn]
+    # Create a transformed dataset
+    $transformedData = @()
 
-        # Find matching column (case-insensitive)
-        $matchedColumn = $columnNames | Where-Object { $_ -match [regex]::Escape($oldColumn) }
+    foreach ($row in $data) {
+        # Create an empty ordered hashtable for each row
+        $newRow = [ordered]@{}
 
-        if ($matchedColumn) {
-            $data | ForEach-Object {
-                $_ | Add-Member -MemberType NoteProperty -Name $newColumn -Value $_.$matchedColumn -Force
-                $_.PSObject.Properties.Remove($matchedColumn)  # Remove old column
+        foreach ($oldColumn in $columnMappings.Keys) {
+            $newColumn = $columnMappings[$oldColumn]
+
+            # Find matching column (case-insensitive)
+            $matchedColumn = $columnNames | Where-Object { $_ -match [regex]::Escape($oldColumn) }
+
+            if ($matchedColumn) {
+                $newRow[$newColumn] = $row.$matchedColumn
+            } else {
+                # If column is missing, keep it empty
+                $newRow[$newColumn] = $null  
             }
-            Write-Output "Renamed '$matchedColumn' -> '$newColumn'"
         }
+
+        $transformedData += [PSCustomObject]$newRow
     }
 
-    # Remove skipped columns
-    foreach ($col in $skippedColumns) {
-        if ($columnNames -contains $col) {
-            $data | ForEach-Object { $_.PSObject.Properties.Remove($col) }
-            Write-Output "Skipped column: $col"
-        }
-    }
+    # Force column order explicitly before exporting
+    $orderedColumns = @($columnMappings.Values)
 
-    # Export the modified data to CSV
-    $data | Export-Csv -Path $OutputFile -NoTypeInformation
+    # Export the modified data with enforced column order
+    $transformedData | Select-Object -Property $orderedColumns | Export-Csv -Path $OutputFile -NoTypeInformation
+
     Write-Output "Processed file saved as: $OutputFile"
-
-    
 }
 
 
